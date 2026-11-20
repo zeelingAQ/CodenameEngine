@@ -18,22 +18,37 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
       - name: Setting up Haxe
         uses: krdlab/setup-haxe@v2
         with:
           haxe-version: ${{ env.HAXE_VERSION }}
+
       - name: Installing/Updating libraries
         run: |
           haxelib --global update haxelib
           haxe -cp commandline -D analyzer-optimize --run Main setup -si --no-vscheck
+
+      - name: Fix Lime Submodules and Rebuild
+        run: |
+          # 1. 进入 Lime 的 git 目录，修复子模块
+          cd .haxelib/lime/git
+          git submodule init
+          git submodule sync
+          git submodule update --recursive
+          cd ${{ github.workspace }}
+
+          # 2. 强制重建 lime 的 C++ 原生库 (lime.ndll)
+          haxelib run lime rebuild cpp
+
       - name: Building the game
         run: |
           haxelib run lime setup -alias -y -nocffi
           haxelib run lime rebuild hxcpp
           haxelib run lime rebuild tools
-          haxelib run lime rebuild cpp
           haxelib run lime rebuild windows -nocolor -release
           haxelib run lime build windows -DCOMPILE_EXPERIMENTAL -DHXCPP_OPTIMIZE_LINK
+
       - name: Uploading artifact (executable)
         uses: actions/upload-artifact@v7
         with:
@@ -41,6 +56,7 @@ jobs:
           path: |
             export/release/windows/bin/CodenameEngine.exe
             export/release/windows/bin/lime.ndll
+
       - name: Uploading artifact (entire build)
         uses: actions/upload-artifact@v7
         with:
