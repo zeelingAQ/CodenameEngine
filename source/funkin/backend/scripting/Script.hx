@@ -144,11 +144,15 @@ class Script extends FlxBasic implements IFlxDestroyable
 			"ThreadUtil" => funkin.backend.utils.ThreadUtil,
 			"MemoryUtil" => funkin.backend.utils.MemoryUtil,
 			"BitmapUtil" => funkin.backend.utils.BitmapUtil,
-			"WindowUtils" => funkin.backend.utils.WindowUtils,
 
 			#if TRANSLATIONS_SUPPORT
 			"TranslationUtil" => funkin.backend.utils.TranslationUtil, "translate" => funkin.backend.utils.TranslationUtil.get,
 			#end
+
+			// I18n / GameJolt (merged from upstream)
+			"I18n" => jsoni18n.I18n,
+			"GameJolt" => gamejolt.GameJolt,
+			"GJRequest" => gamejolt.GJRequest,
 		];
 	}
 
@@ -205,7 +209,9 @@ class Script extends FlxBasic implements IFlxDestroyable
 	 */
 	public static function getDefaultPreprocessors():Map<String, Dynamic>
 	{
-		var defines = funkin.backend.system.macros.DefinesMacro.defines;
+		// NOTE: `DefinesMacro.defines` is a global map; returning it directly means
+		// callers can mutate global state. `.copy()` keeps this function side-effect free.
+		var defines = funkin.backend.system.macros.DefinesMacro.defines.copy();
 		defines.set("CODENAME_ENGINE", true);
 		defines.set("CODENAME_VER", Flags.VERSION);
 		defines.set("CODENAME_BUILD", 2675); // 2675 being the last build num before it was removed
@@ -233,8 +239,6 @@ class Script extends FlxBasic implements IFlxDestroyable
 	 * Shared empty argument array, used when calling scripts without parameters (avoids allocations).
 	 */
 	private static var _EMPTY_ARGS:Array<Dynamic> = [];
-
-	private var _ONE_ARG:Array<Dynamic> = [];
 
 	/**
 	 * Script name (with extension)
@@ -341,8 +345,14 @@ class Script extends FlxBasic implements IFlxDestroyable
 
 		var oldScript = curScript;
 		curScript = this;
-		onLoad();
-		curScript = oldScript;
+		try
+		{
+			onLoad();
+		}
+		finally
+		{
+			curScript = oldScript;
+		}
 
 		didLoad = true;
 	}
@@ -367,10 +377,10 @@ class Script extends FlxBasic implements IFlxDestroyable
 	 */
 	public function trace(v:Dynamic)
 	{
-		var fileName = this.fileName;
-		if (remappedNames.exists(fileName))
-			fileName = remappedNames.get(fileName);
-		Logs.traceColored([Logs.logText(fileName + ': ', GREEN), Logs.logText(Std.string(v))], TRACE);
+		var displayName = this.fileName;
+		if (remappedNames.exists(displayName))
+			displayName = remappedNames.get(displayName);
+		Logs.traceColored([Logs.logText(displayName + ': ', GREEN), Logs.logText(Std.string(v))], TRACE);
 	}
 
 	/**
@@ -383,23 +393,14 @@ class Script extends FlxBasic implements IFlxDestroyable
 	{
 		var oldScript = curScript;
 		curScript = this;
-
-		var result = onCall(func, parameters);
-
-		curScript = oldScript;
-		return result;
-	}
-
-	/**
-	 * Calls the function `func` defined in the script with a single argument, reusing an internal array to avoid allocations.
-	 * @param func Name of the function
-	 * @param arg Argument of the function
-	 * @return Result (if void, then null)
-	 */
-	public function callOne(func:String, arg:Dynamic):Dynamic
-	{
-		_ONE_ARG[0] = arg;
-		return call(func, _ONE_ARG);
+		try
+		{
+			return onCall(func, parameters == null ? _EMPTY_ARGS : parameters);
+		}
+		finally
+		{
+			curScript = oldScript;
+		}
 	}
 
 	/**
@@ -445,10 +446,10 @@ class Script extends FlxBasic implements IFlxDestroyable
 	 */
 	public function error(text:String, ?additionalInfo:Dynamic):Void
 	{
-		var fileName = this.fileName;
-		if (remappedNames.exists(fileName))
-			fileName = remappedNames.get(fileName);
-		Logs.traceColored([Logs.logText(fileName, RED), Logs.logText(text)], ERROR);
+		var displayName = this.fileName;
+		if (remappedNames.exists(displayName))
+			displayName = remappedNames.get(displayName);
+		Logs.traceColored([Logs.logText(displayName, RED), Logs.logText(text)], ERROR);
 	}
 
 	override public function toString():String
