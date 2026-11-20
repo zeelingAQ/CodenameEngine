@@ -7,7 +7,9 @@
 	<haxedef name="SAVE_NAME" value="save-default"/>
 
 	<haxedef name="SAVE_OPTIONS_PATH" value="CodenameEngine"/>
-	<haxedef name="SAVE_OPTIONS_NAME" value="options"/>
+	<haxedef name="SAVE_OPTIONS_NAME" value="options">
+	<!-- 抑制 MSVC 警告 C4758，避免其被当作错误导致构建失败 -->
+<compilerflag value="/wd4758" />
 
 	<!--
 		May be used by the libraries of the engine to check
