@@ -6,13 +6,10 @@ import flixel.addons.transition.TransitionData;
 import flixel.graphics.FlxGraphic;
 import flixel.math.FlxPoint;
 import flixel.math.FlxRect;
-import funkin.backend.system.FakeCamera;
-import funkin.backend.system.FakeCamera.FakeCallCamera;
 import flixel.system.ui.FlxSoundTray;
 import funkin.backend.assets.AssetSource;
 import funkin.backend.assets.AssetsLibraryList;
 import funkin.backend.assets.ModsFolder;
-import funkin.backend.system.console.ConsoleUI;
 import funkin.backend.system.framerate.Framerate;
 import funkin.backend.system.framerate.SystemInfo;
 import funkin.backend.system.modules.*;
@@ -26,36 +23,23 @@ import openfl.text.TextFormat;
 import openfl.utils.AssetLibrary;
 import sys.FileSystem;
 import sys.io.File;
-#if android
-import extension.androidtools.content.Context;
-import extension.androidtools.os.Build;
-#end
-
-#if IMGUI_ENABLED
-import lime.tools.imgui.ImGuiFlags;
-import lime.tools.imgui.ImGuiTypes;
-#end
+import lime.system.System as LimeSystem;
 
 class Main extends Sprite
 {
 	public static var instance:Main;
 
-	public static var modToLoad:String = null;
-	public static var forceGPUOnlyBitmapsOff:Bool = false;
+	public static var modToLoad:String = "holyquintet";
+	public static var forceGPUOnlyBitmapsOff:Bool = #if (desktop || mobile) false #else true #end;
 	public static var noTerminalColor:Bool = false;
 	public static var verbose:Bool = false;
-	public static var goToSong:String = null;
-	public static var goToDifficulty:String = null;
-	public static var goToVariation:String = null;
-	public static var goToCharter:Bool = false;
 
 	public static var scaleMode:FunkinRatioScaleMode;
-	#if !mobile
+	
 	public static var framerateSprite:Framerate;
-	#end
 
-	var gameWidth:Int = 1280; // Width of the game in pixels (might be less / more in actual pixels).
-	var gameHeight:Int = 720; // Height of the game in pixels (might be less / more in actual pixels).
+	var gameWidth:Int = 1920; // Width of the game in pixels (might be less / more in actual pixels).
+	var gameHeight:Int = 1080; // Height of the game in pixels (might be less / more in actual pixels).
 	var skipSplash:Bool = true; // Whether to skip the flixel splash screen that appears in release mode.
 	var startFullscreen:Bool = false; // Whether to start the game in fullscreen on desktop targets
 
@@ -70,12 +54,9 @@ class Main extends Sprite
 	// You can pretty much ignore everything from here on - your code should go in your states.
 
 	public static function preInit() {
-		#if sys
 		funkin.backend.utils.NativeAPI.registerAsDPICompatible();
 		funkin.backend.system.CommandLineHandler.parseCommandLine(Sys.args());
 		funkin.backend.system.Main.fixWorkingDirectory();
-		funkin.backend.system.Logs.init();
-		#end
 	}
 
 	public function new()
@@ -83,23 +64,27 @@ class Main extends Sprite
 		super();
 
 		instance = this;
-
-		#if IMGUI_ENABLED
-		initImGui();
-		addChild(ImGuiHandler.instance);
+		
+		#if mobile
+		#if android
+		StorageUtil.requestPermissions();
 		#end
-		// Before the game loop, so an uncaught error is drawn in-game instead of closing the window.
+		Sys.setCwd(StorageUtil.getStorageDirectory());
+		#end
+
 		CrashHandler.init();
-		ConsoleUI.init();
 
-		// i hate you hxcpp
-		FakeCamera.instance = new FakeCamera();
-		FakeCallCamera.instance = new FakeCallCamera();
-
+		#if !web framerateSprite = new Framerate(); #end
+		
 		addChild(game = new FunkinGame(gameWidth, gameHeight, MainState, Options.framerate, Options.framerate, skipSplash, startFullscreen));
 
-		#if (!mobile && !web)
-		addChild(framerateSprite = new Framerate());
+		#if android FlxG.android.preventDefaultKeys = [BACK]; #end
+
+		#if !web
+		addChild(framerateSprite);
+		#if mobile
+		FlxG.stage.window.onResize.add((w:Int, h:Int) -> framerateSprite.setScale());
+		#end
 		SystemInfo.init();
 		#end
 	}
@@ -120,16 +105,24 @@ class Main extends Sprite
 	// DEPRECATED
 	@:dox(hide) public static function execAsync(func:Void->Void) ThreadUtil.execAsync(func);
 
+	private static function getTimer():Int {
+		return time = Lib.getTimer();
+	}
+
 	public static function loadGameSettings() {
 		WindowUtils.init();
 		SaveWarning.init();
 		MemoryUtil.init();
+		@:privateAccess
+		FlxG.game.getTimer = getTimer;
 		FunkinCache.init();
 		Paths.assetsTree = new AssetsLibraryList();
 
 		#if UPDATE_CHECKING
 		funkin.backend.system.updating.UpdateUtil.init();
 		#end
+		ShaderResizeFix.init();
+		Logs.init();
 		Paths.init();
 
 		hscript.Interp.importRedirects = funkin.backend.scripting.Script.getDefaultImportRedirects();
@@ -146,13 +139,12 @@ class Main extends Sprite
 		funkin.options.PlayerSettings.init();
 		Options.load();
 
-		game.focusLostFramerate = 30;
 		FlxG.fixedTimestep = false;
+
 		FlxG.scaleMode = scaleMode = new FunkinRatioScaleMode();
-		FlxG.sound.applySoundCurve = applySoundCurve;
-		FlxG.sound.reverseSoundCurve = reverseSoundCurve;
 
 		Conductor.init();
+		AudioSwitchFix.init();
 		EventManager.init();
 		FlxG.signals.focusGained.add(onFocus);
 		FlxG.signals.preStateSwitch.add(onStateSwitch);
@@ -166,37 +158,16 @@ class Main extends Sprite
 
 		ModsFolder.init();
 		#if MOD_SUPPORT
-		if (FileSystem.exists("mods/autoload.txt"))
-			modToLoad = File.getContent("mods/autoload.txt").trim();
+		if (FileSystem.exists(#if mobile StorageUtil.getStorageDirectory(true) + #end "mods/autoload.txt"))
+			modToLoad = File.getContent(#if mobile StorageUtil.getStorageDirectory(true) + #end "mods/autoload.txt").trim();
 
 		ModsFolder.switchMod(modToLoad.getDefault(Options.lastLoadedMod));
 		#end
 
 		initTransition();
-	}
-
-	public static function applySoundCurve(volume:Float) {
-		return Flags.USE_SOUND_VOLUME_CURVE ? Math.pow(volume, 1.75) : volume;
-	}
-
-	public static function reverseSoundCurve(curvedVolume:Float) {
-		return Flags.USE_SOUND_VOLUME_CURVE ? Math.pow(curvedVolume, 0.5714285714285714) : curvedVolume;
-	}
-
-	static var persistShaderKeys:Map<String, Bool>;
-
-	public static function refreshShaders() @:privateAccess {
-		if (persistShaderKeys == null) {
-			persistShaderKeys = [for (k in Lib.current.stage.context3D.__programs.keys()) k => true];
-		}
-		else {
-			for (key => program in Lib.current.stage.context3D.__programs) {
-				if (persistShaderKeys.get(key) || Type.resolveClass(key) != null) continue;
-
-				program.dispose();
-				Lib.current.stage.context3D.__programs.remove(key);
-			}
-		}
+		#if mobile
+		LimeSystem.allowScreenTimeout = Options.screenTimeOut;
+		#end
 	}
 
 	public static function refreshAssets() @:privateAccess {
@@ -215,8 +186,6 @@ class Main extends Sprite
 		}
 
 		game.addChildAt(game.soundTray = daSndTray, index);
-
-		refreshShaders();
 	}
 
 	public static function initTransition() {
@@ -237,37 +206,28 @@ class Main extends Sprite
 	private static function onStateSwitch() {
 		scaleMode.resetSize();
 	}
+
 	public static function onUpdate() {
-		if (#if IMGUI_ENABLED Options.useNativeConsole && #end
-			PlayerSettings.solo.controls.DEV_CONSOLE)
+		if (PlayerSettings.solo.controls.DEV_CONSOLE)
 			NativeAPI.allocConsole();
 
-		#if IMGUI_ENABLED
-		if ((ImGuiIO.configFlags & ImGuiConfigFlags.ViewportsEnable) != 0)
-		{
-			if (ImGui.isAnyWindowMultiViewport()) {
-				if (!imGuiActiveLastFrame) {
-					imGuiActiveLastFrame = true;
-					FlxG.autoPause = false;
-					FlxG.game.focusLostFramerate = FlxG.drawFramerate;
-				}
-			} else {
-				if (imGuiActiveLastFrame) {
-					imGuiActiveLastFrame = false;
-					FlxG.autoPause = Options.autoPause;
-					FlxG.game.focusLostFramerate = 30;
-				}
-			}
-		}
-		#end
-
-		if (PlayerSettings.solo.controls.FPS_COUNTER && Options.fpsCounter)
+		if (PlayerSettings.solo.controls.FPS_COUNTER)
 			Framerate.debugMode = (Framerate.debugMode + 1) % 3;
 	}
 
 	private static function onStateSwitchPost() {
 		// manual asset clearing since base openfl one does'nt clear lime one
 		// does'nt clear bitmaps since flixel fork does it auto
+
+		@:privateAccess {
+			// clear uint8 pools
+			for(length=>pool in openfl.display3D.utils.UInt8Buff._pools) {
+				for(b in pool.clear())
+					b.destroy();
+			}
+
+			openfl.display3D.utils.UInt8Buff._pools.clear();
+		}
 
 		MemoryUtil.clearMajor();
 	}
@@ -278,9 +238,7 @@ class Main extends Sprite
 		if (!noCwdFix && !sys.FileSystem.exists('manifest/default.json')) {
 			Sys.setCwd(haxe.io.Path.directory(Sys.programPath()));
 		}
-		#elseif android
-		Sys.setCwd(haxe.io.Path.addTrailingSlash(VERSION.SDK_INT > 30 ? Context.getObbDir() : Context.getExternalFilesDir()));
-		#elseif (ios || switch)
+		#elseif switch
 		Sys.setCwd(haxe.io.Path.addTrailingSlash(openfl.filesystem.File.applicationStorageDirectory.nativePath));
 		#end
 	}
@@ -288,62 +246,5 @@ class Main extends Sprite
 	private static var _tickFocused:Float = 0;
 	public static function get_timeSinceFocus():Float {
 		return (FlxG.game.ticks - _tickFocused) / 1000;
-	}
-
-	#if IMGUI_ENABLED
-	private static var imGuiActiveLastFrame:Bool = true;
-	#end
-	private static function initImGui() {
-		#if IMGUI_ENABLED
-		//codename styled
-		var vcrFont = ImGuiIO.fonts.addFontFromFileTTF("assets/fonts/vcr.ttf");
-		ImGuiIO.fontDefault = vcrFont;
-		var style = ImGui.getStyle();
-		style.windowBorderSize = 2;
-		style.childBorderSize = 2;
-		style.popupBorderSize = 2;
-		style.frameBorderSize = 2;
-		style.windowRounding = 6;
-		style.childRounding = 6;
-		style.popupRounding = 6;
-		style.frameRounding = 6;
-		style.scrollbarRounding = 6;
-		style.grabRounding = 6;
-		style.setColor(ImGuiCol.WindowBg,               new ImVec4(0.11, 0.00, 0.16, 0.8));
-		style.setColor(ImGuiCol.Border,                 new ImVec4(0.59, 0.59, 0.59, 0.50));
-		style.setColor(ImGuiCol.FrameBg,                new ImVec4(0.13, 0.00, 0.19, 0.54));
-		style.setColor(ImGuiCol.FrameBgHovered,         new ImVec4(0.33, 0.15, 0.42, 0.40));
-		style.setColor(ImGuiCol.FrameBgActive,          new ImVec4(0.33, 0.15, 0.42, 0.67));
-		style.setColor(ImGuiCol.TitleBg,                new ImVec4(0.38, 0.36, 0.40, 0.32));
-		style.setColor(ImGuiCol.TitleBgActive,          new ImVec4(0.38, 0.36, 0.40, 0.72));
-		style.setColor(ImGuiCol.CheckMark,              new ImVec4(0.80, 0.60, 1.00, 1.00));
-		style.setColor(ImGuiCol.SliderGrab,             new ImVec4(0.33, 0.30, 0.35, 1.00));
-		style.setColor(ImGuiCol.SliderGrabActive,       new ImVec4(0.80, 0.60, 1.00, 1.00));
-		style.setColor(ImGuiCol.Button,                 new ImVec4(0.14, 0.13, 0.13, 0.99));
-		style.setColor(ImGuiCol.ButtonHovered,          new ImVec4(0.39, 0.00, 0.59, 1.00));
-		style.setColor(ImGuiCol.ButtonActive,           new ImVec4(0.76, 0.00, 1.00, 1.00));
-		style.setColor(ImGuiCol.Header,                 new ImVec4(0.15, 0.13, 0.13, 0.8));
-		style.setColor(ImGuiCol.HeaderHovered,          new ImVec4(0.39, 0.00, 0.59, 0.80));
-		style.setColor(ImGuiCol.HeaderActive,           new ImVec4(0.76, 0.00, 1.00, 1.00));
-		style.setColor(ImGuiCol.SeparatorHovered,       new ImVec4(0.39, 0.00, 0.59, 0.78));
-		style.setColor(ImGuiCol.SeparatorActive,        new ImVec4(0.76, 0.00, 1.00, 1.00));
-		style.setColor(ImGuiCol.ResizeGrip,             new ImVec4(0.15, 0.13, 0.13, 0.20));
-		style.setColor(ImGuiCol.ResizeGripHovered,      new ImVec4(0.39, 0.00, 0.59, 0.67));
-		style.setColor(ImGuiCol.ResizeGripActive,       new ImVec4(0.76, 0.00, 1.00, 0.95));
-		style.setColor(ImGuiCol.InputTextCursor,        new ImVec4(0.68, 0.13, 0.96, 1.00));
-		style.setColor(ImGuiCol.TabHovered,             new ImVec4(0.39, 0.00, 0.59, 0.80));
-		style.setColor(ImGuiCol.Tab,                    new ImVec4(0.21, 0.19, 0.19, 0.86));
-		style.setColor(ImGuiCol.TabSelected,            new ImVec4(0.76, 0.00, 1.00, 1.00));
-		style.setColor(ImGuiCol.TabSelectedOverline,    new ImVec4(0.76, 0.00, 1.00, 1.00));
-		style.setColor(ImGuiCol.TabDimmed,              new ImVec4(0.36, 0.18, 0.41, 1.00));
-		style.setColor(ImGuiCol.TabDimmedSelected,      new ImVec4(0.46, 0.21, 0.54, 1.00));
-		style.setColor(ImGuiCol.DockingPreview,         new ImVec4(0.56, 0.11, 0.71, 1.00));
-
-		ImGuiHandler.instance.addCallback(function() {
-			var ui = ConsoleUI.instance;
-			if (ui == null || !ui.uiVisible) return;
-			ImGui.dockSpaceOverViewport(0, null, ImGuiDockNodeFlags.PassthruCentralNode);
-		});
-		#end
 	}
 }
